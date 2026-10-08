@@ -10,7 +10,7 @@ from slowapi.util import get_remote_address
 
 load_dotenv()
 
-import llm  # noqa: E402  (nach load_dotenv, damit ANTHROPIC_MODEL gelesen wird)
+import llm  # noqa: E402  (nach load_dotenv, damit OPENROUTER_MODEL gelesen wird)
 from prompts import Direction, Intensity  # noqa: E402
 
 MAX_TEXT_LENGTH = 500

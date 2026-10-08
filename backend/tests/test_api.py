@@ -77,3 +77,39 @@ def test_translate_timeout(monkeypatch):
 def test_prompts_differ_by_direction_and_intensity():
     assert "Klartext" in build_system_prompt("to_plain", "medium")
     assert build_system_prompt("to_business", "low") != build_system_prompt("to_business", "high")
+
+
+def _fake_client(content, finish_reason="stop", choices=True):
+    from types import SimpleNamespace as NS
+
+    response = NS(
+        choices=[NS(finish_reason=finish_reason, message=NS(content=content))] if choices else [],
+        usage=NS(total_tokens=7),
+    )
+    return NS(chat=NS(completions=NS(create=lambda **_: response)))
+
+
+def test_llm_strips_echoed_tags(monkeypatch):
+    monkeypatch.setattr(llm, "_get_client", lambda: _fake_client(" <text>Klartext</text> "))
+    assert llm.translate("x", "to_plain", "medium") == ("Klartext", 7)
+
+
+@pytest.mark.parametrize(
+    "client_kwargs",
+    [
+        {"content": "halber Sat", "finish_reason": "length"},
+        {"content": None, "choices": False},
+        {"content": "  "},
+    ],
+)
+def test_llm_rejects_unusable_responses(monkeypatch, client_kwargs):
+    monkeypatch.setattr(llm, "_get_client", lambda: _fake_client(**client_kwargs))
+    with pytest.raises(llm.LLMError):
+        llm.translate("x", "to_plain", "medium")
+
+
+def test_llm_requires_api_key(monkeypatch):
+    monkeypatch.setattr(llm, "_client", None)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    with pytest.raises(llm.LLMError, match="OPENROUTER_API_KEY"):
+        llm.translate("x", "to_plain", "medium")
