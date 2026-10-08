@@ -2,7 +2,9 @@
 
 Stop trusting Claude's first answer. Run any decision through 5 AI advisors who argue, peer-review each other anonymously, and hand you a verdict you can actually trust.
 
-Based on [Andrej Karpathy's LLM Council](https://x.com/karpathy/status/1962263486196867115) methodology, adapted to run entirely inside Claude Code using sub-agents with different thinking styles.
+Based on [Andrej Karpathy's LLM Council](https://x.com/karpathy/status/1962263486196867115) methodology, adapted to run entirely inside Claude Code as an **agent team**: each advisor is a named teammate with a different thinking style.
+
+**Requires** agent teams to be enabled (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`, set in this project's `.claude/settings.json`) and an interactive session. Otherwise the skill falls back to plain sub-agents.
 
 ---
 
@@ -18,15 +20,15 @@ When you say **"council this"**, the skill:
 
 1. **Scans your workspace** for relevant context (CLAUDE.md, memory files, etc.)
 2. **Frames your question** into a neutral prompt
-3. **Spawns 5 advisors in parallel**, each with a different thinking style:
+3. **Spawns 5 advisor teammates in parallel**, each with a different thinking style:
    - **The Contrarian** — hunts for what will fail
    - **The First Principles Thinker** — asks if you're solving the right problem
    - **The Expansionist** — looks for upside you're missing
    - **The Outsider** — responds with zero context (catches curse of knowledge)
    - **The Executor** — only cares what you do Monday morning
-4. **Anonymizes their responses** and runs a peer review — advisors review each other without knowing who said what
-5. **Chairman synthesizes** the verdict: where the council agrees, where it clashes, blind spots it caught, a clear recommendation, and one concrete next step
-6. **Generates a visual HTML report** + full markdown transcript
+4. **Anonymizes their responses** and sends them back to the same teammates for peer review — advisors review each other without knowing who said what
+5. **A chairman teammate synthesizes** the verdict: where the council agrees, where it clashes, blind spots it caught, a clear recommendation, and one concrete next step
+6. **Shuts down the team** and generates a visual HTML report + full markdown transcript
 
 All in one session. About 4 minutes.
 

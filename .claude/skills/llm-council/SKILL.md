@@ -9,7 +9,13 @@ You ask one AI a question, you get one answer. That answer might be great. It mi
 
 The council fixes this. It runs your question through 5 independent advisors, each thinking from a fundamentally different angle. Then they review each other's work. Then a chairman synthesizes everything into a final recommendation that tells you where the advisors agree, where they clash, and what you should actually do.
 
-This is adapted from Andrej Karpathy's LLM Council. He dispatches queries to multiple models, has them peer-review each other anonymously, then a chairman produces the final answer. We do the same thing inside Claude using sub-agents with different thinking lenses instead of different models.
+This is adapted from Andrej Karpathy's LLM Council. He dispatches queries to multiple models, has them peer-review each other anonymously, then a chairman produces the final answer. We do the same thing inside Claude Code using an **agent team**: each advisor is a named teammate with its own context window and a different thinking lens. The same teammates that answer the question later peer-review the anonymized answers, and a chairman teammate synthesizes the verdict. You (the main session) are the team lead.
+
+### prerequisites
+
+- Agent teams must be enabled: `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` (set in this project's `.claude/settings.json`).
+- The session must be interactive. In `-p` / headless / Agent SDK mode teammates can't be spawned.
+- **Fallback:** if either condition isn't met, run the same steps with ordinary (unnamed) sub-agents: spawn 5 fresh reviewer sub-agents in step 3 instead of messaging the advisors. Tell the user the council ran without an agent team.
 
 ---
 
@@ -85,20 +91,33 @@ If the question is too vague ("council this: my business"), ask one clarifying q
 
 Save the framed question for the transcript.
 
-### step 2: convene the council (5 sub-agents in parallel)
+### step 2: convene the council (5 teammates in parallel)
 
-Spawn all 5 advisors simultaneously as sub-agents. Each gets:
+Spawn all 5 advisors simultaneously as **teammates**: in a single message, make 5 `Agent` tool calls, each with a `name` (that's what makes it a teammate instead of a sub-agent). Do not use `subagent_type: "fork"` and do not pass `isolation`, since either turns the call back into a plain sub-agent. Use exactly these names so you can message them later:
+
+| Advisor | Teammate name |
+| :- | :- |
+| The Contrarian | `contrarian` |
+| The First Principles Thinker | `first-principles` |
+| The Expansionist | `expansionist` |
+| The Outsider | `outsider` |
+| The Executor | `executor` |
+
+Teammates don't see your conversation history. Everything they need goes into the spawn prompt. Each gets:
 
 1. Their advisor identity and thinking style (from the descriptions above)
 2. The framed question
 3. A clear instruction: respond independently. Do not hedge. Do not try to be balanced. Lean fully into your assigned perspective. If you see a fatal flaw, say it. If you see massive upside, say it. Your job is to represent your angle as strongly as possible. The synthesis comes later.
+4. An instruction not to message the other advisors in this round, so the answers stay independent.
 
 Each advisor should produce a response of 150-300 words. Long enough to be substantive, short enough to be scannable.
 
-**Sub-agent prompt template:**
+Wait until all 5 teammates have gone idle. Each one's idle notification carries its final answer, so you don't need to poll. Don't write the advisors' answers yourself while waiting. If a teammate fails or stops without an answer, message it once by name to retry; if it fails again, spawn a replacement with the same name and prompt.
+
+**Teammate spawn prompt template:**
 
 ```
-You are [Advisor Name] on an LLM Council.
+You are [Advisor Name] on an LLM Council. You are a teammate in an agent team; the team lead coordinates the council.
 
 Your thinking style: [advisor description from above]
 
@@ -111,24 +130,28 @@ A user has brought this question to the council:
 Respond from your perspective. Be direct and specific. Don't hedge or try to be balanced. Lean fully into your assigned angle. The other advisors will cover the angles you're not covering.
 
 Keep your response between 150-300 words. No preamble. Go straight into your analysis.
+
+Do not message the other advisors in this round. When you're done, end your turn with your response as your final answer; the lead receives it automatically. Stay available afterwards: the lead will message you for a peer review round.
 ```
 
-### step 3: peer review (5 sub-agents in parallel)
+### step 3: peer review (same 5 teammates, via SendMessage)
 
 This is the step that makes the council more than just "ask 5 times." It's the core of Karpathy's insight.
 
 Collect all 5 advisor responses. Anonymize them as Response A through E (randomize which advisor maps to which letter so there's no positional bias).
 
-Spawn 5 new sub-agents, one for each advisor. Each reviewer sees all 5 anonymized responses and answers three questions:
+Don't spawn new agents. Send the review prompt to each of the 5 existing teammates by name with `SendMessage` (one message per recipient, all 5 in a single turn). Each reviewer sees all 5 anonymized responses and answers three questions:
 
 1. Which response is the strongest and why? (pick one)
 2. Which response has the biggest blind spot and what is it?
 3. What did ALL responses miss that the council should consider?
 
-**Reviewer prompt template:**
+Each advisor will recognize its own response among the five. That's fine, but it must not pick its own response as the strongest, and it reviews from its own thinking lens. Wait until all 5 have gone idle again and collect their reviews from the idle notifications.
+
+**Reviewer message template:**
 
 ```
-You are reviewing the outputs of an LLM Council. Five advisors independently answered this question:
+Peer review round. Five advisors (including you) independently answered this question:
 
 ---
 [framed question]
@@ -157,12 +180,16 @@ Answer these three questions. Be specific. Reference responses by letter.
 2. Which response has the biggest blind spot? What is it missing?
 3. What did ALL five responses miss that the council should consider?
 
-Keep your review under 200 words. Be direct.
+You will recognize your own response. Do not pick it as the strongest. Review from your own thinking lens.
+
+Keep your review under 200 words. Be direct. Don't message the other advisors. End your turn with the review as your final answer.
 ```
 
-### step 4: chairman synthesis
+### step 4: chairman synthesis (chairman teammate)
 
-This is the final step. One agent gets everything: the original question, all 5 advisor responses (now de-anonymized so you can see which advisor said what), and all 5 peer reviews.
+This is the final step. Spawn one more teammate with `name: "chairman"`. It gets everything in its spawn prompt: the original question, all 5 advisor responses (now de-anonymized so it can see which advisor said what), and all 5 peer reviews (labelled with which advisor wrote each one). Its final answer arrives in its idle notification.
+
+If the chairman needs clarification on a specific argument, it may message that advisor by name (e.g. `contrarian`) with `SendMessage` before writing the verdict. Keep that to one question per advisor at most.
 
 The chairman's job is to produce the final council output. It follows this structure:
 
@@ -226,7 +253,13 @@ Produce the council verdict using this exact structure:
 [A single concrete next step. Not a list. One thing.]
 
 Be direct. Don't hedge. The whole point of the council is to give the user clarity they couldn't get from a single perspective.
+
+The advisors are still reachable as teammates (contrarian, first-principles, expansionist, outsider, executor). If one argument is genuinely unclear, you may ask that advisor one short question via SendMessage before writing. End your turn with the full verdict as your final answer.
 ```
+
+### step 4b: shut down the team
+
+Once the chairman's verdict is in, ask all 6 teammates (`contrarian`, `first-principles`, `expansionist`, `outsider`, `executor`, `chairman`) to shut down by sending each one a shutdown request. Shutdown can take a moment; don't wait on it before generating the report. The team's directories are cleaned up automatically when the session ends.
 
 ### step 5: generate the council report
 
@@ -303,7 +336,9 @@ The user sees the HTML report. The transcript is there if they want to dig deepe
 
 ## important notes
 
-- **Always spawn all 5 advisors in parallel.** Sequential spawning wastes time and lets earlier responses bleed into later ones.
+- **Always spawn all 5 advisors in parallel, as named teammates.** Sequential spawning wastes time and lets earlier responses bleed into later ones. Without a `name` the call is a plain sub-agent, not a teammate.
+- **You are the lead, not an advisor.** Wait for the teammates to finish. Don't write advisor answers or reviews yourself.
+- **Keep round 1 independent.** Advisors must not message each other before the peer review. Cross-talk is only allowed for the chairman's clarifying questions.
 - **Always anonymize for peer review.** If reviewers know which advisor said what, they'll defer to certain thinking styles instead of evaluating on merit.
 - **The chairman can disagree with the majority.** If 4 out of 5 advisors say "do it" but the reasoning of the 1 dissenter is strongest, the chairman should side with the dissenter and explain why.
 - **Don't council trivial questions.** If the user asks something with one right answer, just answer it. The council is for genuine uncertainty where multiple perspectives add value.
